@@ -1,0 +1,15 @@
+package-as: SolarynExpedition
+
+manual-changelog:
+  filename: CHANGELOG.md
+  markup-type: markdown
+
+ignore:
+  - test
+  - docs
+  - .github
+  - .gitignore
+  - README.md
+  - CHANGELOG.md
+  - deploy.sh
+  - CLAUDE.md
