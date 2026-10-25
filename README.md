@@ -73,7 +73,7 @@ A compact tracker, framed like the edge of a map, appears while you're being gui
 1. Download the latest code (**Code → Download ZIP**) or clone the repository.
 2. Copy the folder into your Forever client's add-on folder and make sure it's named **`SolarynExpedition`**:
    ```
-   World of Warcraft/_classic_beta_/Interface/AddOns/SolarynExpedition/
+   World of Warcraft/_forever_/Interface/AddOns/SolarynExpedition/
    ```
    The `.toc` file must be directly inside that folder (`.../SolarynExpedition/SolarynExpedition.toc`), not in a nested `SolarynExpedition-main/` folder.
 3. Restart the game, or `/reload` if you're updating an existing install.

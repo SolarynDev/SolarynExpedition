@@ -15,7 +15,7 @@
 #
 # Slash commands:  /sol  (also /expedition)
 #
-# Target: WoW: Forever, currently in beta (_classic_beta_, interface 16001,
+# Target: WoW: Forever, client folder _forever_ (interface 16001,
 # build 70124). Verified against addons that load on that client, which use
 # C_QuestLog.{GetInfo,GetQuestObjectives,GetNextWaypointForMap,IsQuestFlaggedCompleted}
 # and C_Map.{GetMapChildrenInfo,GetBestMapForUnit,GetPlayerMapPosition,
