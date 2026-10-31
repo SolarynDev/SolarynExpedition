@@ -176,4 +176,4 @@ Run them from the repository root, then copy the add-on files (`*.lua`, `*.xml`,
 
 ## License
 
-[MIT](LICENSE) © 2026 kwalker430
+[MIT](LICENSE) © 2026 SolarynDev
