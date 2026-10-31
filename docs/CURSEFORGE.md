@@ -6,7 +6,7 @@ This file is not shipped in the addon zip (see `.pkgmeta`).
 - **Name:** Solaryn's Expedition
 - **Game / category:** World of Warcraft, Addons. Main category: Quests & Leveling (matches `## X-Category`). Add Map & Minimap and Achievements as additional categories if offered.
 - **License:** MIT (the repo's LICENSE)
-- **Source / issues URL:** https://github.com/kwalker430/SolarynExpedition (and /issues)
+- **Source / issues URL:** https://github.com/SolarynDev/SolarynExpedition (and /issues)
 - **Logo:** square PNG/JPG, at least 400x400. Anything from the tracker's gold-on-ink theme works, e.g. the map icon.
 - **Game version:** WoW: Forever, 1.60.1 (the packager detects this from `## Interface: 16001`).
 
