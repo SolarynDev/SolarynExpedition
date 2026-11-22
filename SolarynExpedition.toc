@@ -9,6 +9,7 @@
 ## SavedVariablesPerCharacter: SolarynCharDB
 ## X-Category: Quests & Leveling
 ## X-Website: https://github.com/SolarynDev/SolarynExpedition
+## X-Curse-Project-ID: 1769487
 
 # ---------------------------------------------------------------------------
 # Solaryn's Expedition — a questing / world-exploration toolkit.
