@@ -1142,13 +1142,18 @@ check("level 10 in Elwynn: next is Westfall, not Redridge or Durotar", withLevel
     local p = ns.ZoneData:Progression(3)
     return p.next[1] and p.next[1].name == "Westfall" and #p.next == 1, names(p.next)
 end))
-check("level 17: in-range zones first, nearest first", withLevel(17, function()
+check("level 17: in-range zones first, nearest first (other things equal)", withLevel(17, function()
     -- Westfall (10-20) and Redridge (15-25) are in range; Duskwood (18-30) opens soon.
+    -- A zone holding your quests may beat a nearer one (see "where to level:
+    -- reasons to go"); between zones with the same pull, nearest wins.
     local p = ns.ZoneData:Progression(3)
     local n = p.next
+    local nearestOk = #n >= 2 and (n[1].pull > n[2].pull or (n[1].distance or 0) <= (n[2].distance or 0))
     local ok = #n == 3 and n[1].inRange and n[2].inRange and not n[3].inRange
-        and n[3].name == "Duskwood" and (n[1].distance or 0) <= (n[2].distance or 0)
-    return ok, names(n)
+        and n[3].name == "Duskwood" and nearestOk
+    local d = {}
+    for i, z in ipairs(n) do d[i] = string.format("%s %.1f yd pull %.2f", z.name, z.distance or -1, z.pull or 0) end
+    return ok, table.concat(d, "; ")
 end))
 check("other continents are never recommended", withLevel(5, function()
     for _, z in ipairs(ns.ZoneData:Progression(10).next) do
@@ -2276,6 +2281,344 @@ do
         check("restore button hides again", not restore:IsShown())
     end
     check("tracker refreshes without error", Hud.lastError == nil, tostring(Hud.lastError))
+end
+
+
+print("\n== hard quests go last ==")
+do
+    goHome()
+    local S = ns.Settings()
+    local q = Mock.QUESTS[1001]
+    local function refresh() ns.QuestData:Invalidate(); ns.QuestData:Scan() end
+    check("an ordinary quest isn't hard", not ns.QuestData:Difficulty(1001).hard)
+    q.isElite = true; refresh()
+    local d = ns.QuestData:Difficulty(1001)
+    check("an elite quest is hard and labelled Elite", d.hard and d.elite and d.label == "Elite", tostring(d.label))
+    q.isElite = nil; q.suggestedGroup = 3; refresh()
+    d = ns.QuestData:Difficulty(1001)
+    check("a group quest is hard and labelled with its size", d.hard and d.group == 3 and d.label == "Group 3",
+        tostring(d.label))
+    q.suggestedGroup = nil; q.tagID, q.tagName = 1, "Group"; refresh()
+    check("a Group tag counts as a group quest", ns.QuestData:Difficulty(1001).group ~= nil)
+    q.tagID, q.tagName = nil, nil
+    local oldLevel = q.level
+    q.level = playerState.level + ns.CAUTION_LEVELS; refresh()
+    check("a quest 3+ levels above you is hard", ns.QuestData:Difficulty(1001).hard)
+    q.level = oldLevel
+    check("a finished quest is never deferred", (function()
+        Mock.QUESTS[1002].isElite = true; refresh()
+        local deferred = ns.QuestData:IsDeferred(1002)
+        Mock.QUESTS[1002].isElite = nil
+        return deferred == false
+    end)())
+
+    -- 1001 is the nearest objective; as an elite it must come after the rest.
+    q.isElite = true; refresh()
+    local oldLimit = S.suggestLimit
+    S.suggestLimit = 10
+    local function posOf(list, id)
+        for i, sg in ipairs(list) do if sg.questID == id and sg.kind == "objective" then return i end end
+    end
+    for _, mode in ipairs({ true, false }) do
+        S.sortByDistance = mode
+        local list = ns.Suggest:ComputeQuietly()
+        local elite, other = posOf(list, 1001), math.max(posOf(list, 1005) or 0, posOf(list, 1003) or 0)
+        check("Next tab (" .. (mode and "nearest first" or "weighted") .. "): elite quest after easier ones",
+            elite and other > 0 and elite > other, string.format("elite %s, last easy %s", tostring(elite), tostring(other)))
+    end
+    S.sortByDistance = true
+    check("Next tab still lists the elite quest, labelled", (function()
+        for _, sg in ipairs(ns.Suggest:ComputeQuietly()) do
+            if sg.questID == 1001 then return sg.hard and sg.difficulty == "Elite" end
+        end
+    end)())
+    S.deferHardQuests = false
+    check("with the option off, the elite quest is ranked normally", (function()
+        local list = ns.Suggest:ComputeQuietly()
+        return posOf(list, 1001) < (posOf(list, 1005) or 99)
+    end)())
+    S.deferHardQuests = true
+
+    local route = ns.Route:Build()
+    local hardAt, lastEasy = nil, 0
+    for i, st in ipairs(route.stops) do
+        if st.questID == 1001 then hardAt = hardAt or i elseif st.kind == "objective" then lastEasy = i end
+    end
+    check("route: the elite quest's stops come after every easier objective",
+        hardAt and hardAt > lastEasy, string.format("elite at %s, last easy objective %s", tostring(hardAt), lastEasy))
+    check("route: elite stop is flagged and labelled", route.stops[hardAt] and route.stops[hardAt].hard
+        and route.stops[hardAt].difficulty == "Elite")
+    local small = ns.Route:Build({ limit = 2 })
+    local has1001 = false
+    for _, id in ipairs(small.questIDs) do if id == 1001 then has1001 = true end end
+    check("route: a full route drops the hard quest first", not has1001, table.concat(small.questIDs, ","))
+    S.suggestLimit = oldLimit
+    q.isElite = nil; refresh()
+    ns.Route:Build()
+end
+
+print("\n== route tidying (2-opt) ==")
+do
+    -- Four objective stops on one map, in a crossing order: 2-opt must not
+    -- make the walk longer, and should untangle it.
+    local function stop(x, y)
+        return { kind = "objective", questID = 9000 + math.floor(x * 100), uiMapID = 1, x = x, y = y,
+            world = ns:WorldPos(1, x, y) }
+    end
+    local from = { uiMapID = 1, x = 0.1, y = 0.1, world = ns:WorldPos(1, 0.1, 0.1) }
+    local path = { stop(0.2, 0.1), stop(0.8, 0.9), stop(0.8, 0.1), stop(0.2, 0.9) }
+    local before = ns.Route.PathCost(path, from)
+    ns.Route.TwoOpt(path, from)
+    local after = ns.Route.PathCost(path, from)
+    check("2-opt shortens a crossing route", after < before, string.format("%.0f -> %.0f", before, after))
+    local mixed = { stop(0.2, 0.1), { kind = "turnin", questID = 1, uiMapID = 1, x = 0.9, y = 0.9,
+        world = ns:WorldPos(1, 0.9, 0.9) }, stop(0.8, 0.1), stop(0.2, 0.9) }
+    ns.Route.TwoOpt(mixed, from)
+    check("2-opt never moves a hand-in", mixed[2].kind == "turnin")
+    check("the built route is never longer than plain nearest-next", (function()
+        ns.Settings().optimizeRoute = false
+        local plain = ns.Route:Build().stops
+        local pp = ns:PlayerPosition(ns:PlayerMapID())
+        local c1 = ns.Route.PathCost(plain, pp)
+        ns.Settings().optimizeRoute = true
+        local tidy = ns.Route:Build().stops
+        local c2 = ns.Route.PathCost(tidy, pp)
+        return c2 <= c1 + 0.001, string.format("%.0f vs %.0f", c2, c1)
+    end)())
+end
+
+print("\n== starting the guide plans from where you stand ==")
+do
+    goHome()
+    local st = ns.Route:Build()
+    st.guiding, st.current = nil, 1
+    ns.Route:Save(st)
+    -- Walk over to the story quest's objective, then start the guide.
+    playerState.mapID, playerState.mapX, playerState.mapY = 1, 0.7, 0.8
+    ns.Route:Guide()
+    local now = ns.Route:Next()
+    goHome(); ns.Route:StopGuiding()
+    check("the first stop is the one beside you, not the one near where you built the route",
+        now and now.questID == 1005, now and tostring(now.questID))
+end
+
+print("\n== opening a quest in the quest log ==")
+do
+    local opened = {}
+    check("no quest log at all: OpenInLog says so", ns.QuestData:OpenInLog(1001) == nil)
+    _G.QuestLogFrame = CreateFrame("Frame")
+    _G.QuestLogFrame:Hide()
+    _G.SelectQuestLogEntry = function(i) opened.index = i end
+    local how = ns.QuestData:OpenInLog(1001)
+    check("classic quest log: shown and the quest selected",
+        how == "frame" and _G.QuestLogFrame:IsShown() and opened.index == C_QuestLog.GetLogIndexForQuestID(1001),
+        tostring(how) .. " " .. tostring(opened.index))
+    _G.QuestLog_OpenToQuest = function(i) opened.toQuest = i end
+    check("QuestLog_OpenToQuest is used when the client has it",
+        ns.QuestData:OpenInLog(1001) == "classic" and opened.toQuest ~= nil)
+    _G.QuestLogFrame, _G.SelectQuestLogEntry, _G.QuestLog_OpenToQuest = nil, nil, nil
+    _G.QuestMapFrame_OpenToQuestDetails = function(id) opened.map = id end
+    check("modern quest log: opened in the world map", ns.QuestData:OpenInLog(1001) == "map" and opened.map == 1001)
+    Mock.inCombat = true
+    opened.map = nil
+    check("the world map log isn't opened in combat", ns.QuestData:OpenInLog(1001) == nil and opened.map == nil)
+    Mock.inCombat = false
+    check("/sol api lists the quest log openers", (function()
+        local found = false
+        for _, n in ipairs(ns.QuestData:QuestLogOpeners()) do
+            if n == "QuestMapFrame_OpenToQuestDetails" then found = true end
+        end
+        return found
+    end)())
+
+    -- The tracker: click the current stop to read it, right-click to re-point.
+    goHome()
+    ns.Route:Build(); ns.Route:Guide()
+    ns.HUD:Refresh()
+    local block = ns.HUD:GetCurrentBlock()
+    local cur = ns.Route:Next()
+    opened.map = nil
+    block:Click("LeftButton")
+    check("tracker: clicking the current stop opens its quest", opened.map == cur.questID,
+        tostring(opened.map) .. " vs " .. tostring(cur.questID))
+    playerState.waypoint = nil
+    opened.map = nil
+    block:Click("RightButton")
+    check("tracker: right-clicking the current stop re-sets the waypoint",
+        playerState.waypoint ~= nil and opened.map == nil)
+    local row = ns.HUD:GetUpcomingRow(1)
+    if row and row.stop then
+        opened.map = nil
+        row:Click("RightButton")
+        check("tracker: right-clicking an upcoming stop opens its quest", opened.map == row.stop.questID)
+        local guided = ns.Route:CurrentIndex()
+        row:Click("LeftButton")
+        check("tracker: clicking an upcoming stop still guides from it", ns.Route:CurrentIndex() ~= guided
+            or ns.Route:CurrentIndex() == row.index)
+    else
+        check("tracker has an upcoming row to click", false)
+    end
+    ns.Route:StopGuiding()
+    _G.QuestMapFrame_OpenToQuestDetails = nil
+    check("tracker refreshes cleanly after the clicks", ns.HUD.lastError == nil, tostring(ns.HUD.lastError))
+end
+
+print("\n== where to level: reasons to go ==")
+do
+    goHome()
+    ns.ZoneData:ResetZoneDraw()
+    check("a zone holding one of your quests ranks first", withLevel(17, function()
+        local p = ns.ZoneData:Progression(3)
+        local n1 = p.next[1]
+        return n1 and n1.name == "Westfall" and n1.logQuests == 1 and n1.reasons[1] == "1 of your quests",
+            names(p.next)
+    end))
+    check("move that quest and the other zone wins", withLevel(17, function()
+        local wp = Mock.QUESTS[1003].wp
+        local old = { wp.mapID, wp.x, wp.y }
+        wp.mapID = 3
+        ns.QuestData:Invalidate()
+        local p = ns.ZoneData:Progression(3)
+        wp.mapID, wp.x, wp.y = old[1], old[2], old[3]
+        ns.QuestData:Invalidate()
+        return p.next[1] and p.next[1].name == "Redridge Mountains", names(p.next)
+    end))
+    check("nothing fits here: zones on another continent are offered", withLevel(5, function()
+        Mock.faction = "Horde"
+        local p = ns.ZoneData:Progression(3)
+        Mock.faction = "Alliance"
+        local z = p.next[1]
+        return z and z.name == "Durotar" and z.otherContinent and z.distance == nil, names(p.next)
+    end))
+    check("Zones tab renders reasons cleanly", withLevel(17, function()
+        ns.Panel:Toggle(true); ns.Panel:SetTab("zones"); ns.Panel:SetTab("next")
+        return ns.Panel.lastError == nil, tostring(ns.Panel.lastError)
+    end))
+end
+
+print("\n== discovery alerts ==")
+do
+    local zone = 1
+    ns.Explored.importedAll = true
+    local before = { areas = {}, missing = { ["Goldshire"] = true, ["Northshire"] = true }, coverage = 0.2 }
+    local rec = SolarynCharDB.zones and SolarynCharDB.zones[zone]
+    local saved = rec and rec.achievement
+    if rec then rec.achievement = { id = 1, name = "Explore Elwynn Forest", done = 1, total = 4,
+        missing = { "Northshire" } } end
+    local msgs = rec and ns.Explored:Announce(zone, before) or {}
+    local all = table.concat(msgs or {}, " | ")
+    check("a newly found area is announced", all:find("Goldshire", 1, true) ~= nil, all)
+    check("crossing a quarter of the zone is announced", all:find("25% explored", 1, true) ~= nil, all)
+    check("discoveries count toward the session", ns.Session:Stats().areas >= 1)
+    ns.Settings().discoveryAlerts = false
+    check("alerts can be turned off", ns.Explored:Announce(zone, before) == nil)
+    ns.Settings().discoveryAlerts = true
+    if rec then rec.achievement = saved end
+end
+
+print("\n== session stats ==")
+do
+    playerState.xp, playerState.xpMax = 100, 1000
+    Mock.now = 1000
+    ns.Session:Reset()
+    playerState.xp = 600; ns:Fire("PLAYER_XP_UPDATE", "player")
+    playerState.xp, playerState.xpMax = 200, 1200; ns:Fire("PLAYER_XP_UPDATE", "player")   -- levelled
+    ns:Fire("QUEST_TURNED_IN", 1002, 250, 0)
+    Mock.now = 1000 + 30 * 60
+    local s = ns.Session:Stats()
+    check("XP is counted across a level-up", s.xp == 500 + 400 + 200, tostring(s.xp))
+    check("XP per hour from the session so far", math.abs((s.xpPerHour or 0) - 2200) < 1, tostring(s.xpPerHour))
+    check("time to level from that pace", s.etaMinutes and math.abs(s.etaMinutes - 1000 / 2200 * 60) < 0.1,
+        tostring(s.etaMinutes))
+    check("quests handed in are counted", s.quests == 1 and s.questXP == 250)
+    local lines = chatAfter(function() ns.Slash.dispatch("stats") end)
+    check("/sol stats prints the session", tostring(lines):find("XP gained", 1, true) ~= nil, tostring(lines))
+    Mock.now, playerState.xp, playerState.xpMax = nil, nil, nil
+end
+
+
+print("\n== version and updates ==")
+do
+    local V = ns.Version
+    check("version comes from the TOC (1.5.0)", ns.version == "1.5.0", tostring(ns.version))
+    check("versions compare numerically", V.Compare("1.10.0", "1.9.9") == 1 and V.Compare("1.5", "1.5.0") == 0
+        and V.Compare("v1.4.2", "1.5.0") == -1 and V.Compare("1.6.0-beta", "1.5.0") == 1 and V.Compare("dev", "1.5.0") == nil)
+    check("this version has what's-new notes", #V:WhatsNew() > 0)
+    check("the addon message prefix is registered", Mock.addonPrefixes[V.PREFIX] == true)
+
+    -- After an update the first login lists what's new, once.
+    SolarynDB.lastVersion = "1.4.0"
+    local text = chatAfter(function() V:CheckUpdated() end)
+    check("after an update, login says what's new", text:find("updated to", 1, true) ~= nil
+        and text:find(V:WhatsNew()[1], 1, true) ~= nil, text:sub(1, 120))
+    check("...and only once", chatAfter(function() V:CheckUpdated() end) == "")
+    SolarynDB.lastVersion = nil
+    local wasFresh = ns.freshInstall
+    ns.freshInstall = true
+    check("a fresh install shows no update notes", chatAfter(function() V:CheckUpdated() end) == "")
+    SolarynDB.lastVersion, ns.freshInstall = nil, false
+    check("an update from 1.4.0 (no saved version) still shows the notes",
+        chatAfter(function() V:CheckUpdated() end):find("updated to", 1, true) ~= nil)
+    ns.freshInstall = wasFresh
+
+    -- Broadcasting to guild and group.
+    V:ResetSession(); Mock.addonSent = {}
+    Mock.inGuild, Mock.group = true, "PARTY"
+    local n = V:Broadcast()
+    local chans = {}
+    for _, m in ipairs(Mock.addonSent) do chans[m.channel] = m.text end
+    check("our version goes to guild and party", n == 2 and chans.GUILD == "V1:" .. ns.version and chans.PARTY ~= nil)
+    check("broadcasts are rate-limited", V:Broadcast() == 0)
+    Mock.inCombat = true; V:ResetSession()
+    check("nothing is sent in combat", V:Broadcast() == 0)
+    Mock.inCombat = false
+
+    -- Hearing other versions.
+    V:ResetSession(); Mock.addonSent = {}
+    SolarynDB.newerVersion = nil
+    local heard = chatAfter(function() ns:Fire("CHAT_MSG_ADDON", V.PREFIX, "V1:9.0.0", "GUILD", "Someone-Testrealm") end)
+    check("a newer version is reported", heard:find("newer version (v9.0.0)", 1, true) ~= nil, heard)
+    check("...remembered until you update", V:Newer() == "9.0.0" and SolarynDB.newerVersion == "9.0.0")
+    check("...and announced once per session",
+        chatAfter(function() ns:Fire("CHAT_MSG_ADDON", V.PREFIX, "V1:9.0.0", "PARTY", "Other") end) == "")
+    check("the minimap tooltip shows the update", (function()
+        local b = ns.MinimapButton:GetButton()
+        if not b then return false, "no minimap button" end
+        b:GetScript("OnEnter")(b)
+        local all = table.concat(GameTooltip.lines, " | ")
+        return all:find("Update available: v9.0.0", 1, true) ~= nil, all
+    end)())
+    Mock.addonSent = {}
+    ns:Fire("CHAT_MSG_ADDON", V.PREFIX, "V1:1.0.0", "GUILD", "Oldtimer")
+    check("an older version gets our version in reply", #Mock.addonSent == 1 and Mock.addonSent[1].channel == "GUILD")
+    Mock.addonSent = {}
+    ns:Fire("CHAT_MSG_ADDON", V.PREFIX, "V1:1.0.0", "GUILD", "Testchar-Testrealm")
+    check("our own message is ignored", #Mock.addonSent == 0)
+    check("other addons' messages are ignored", (function()
+        ns:Fire("CHAT_MSG_ADDON", "OtherAddon", "V1:99.0", "GUILD", "X")
+        return V:Newer() == "9.0.0"
+    end)())
+    check("secret payloads are left alone", pcall(ns.Fire, ns, "CHAT_MSG_ADDON", Mock.secret(V.PREFIX), Mock.secret("x"), "GUILD", "X"))
+    -- Updating past it clears the notice.
+    SolarynDB.newerVersion = "1.4.9"
+    V:CheckUpdated()
+    check("an old 'newer' notice clears once you're past it", SolarynDB.newerVersion == nil and V:Newer() == nil)
+
+    check("/sol version prints status and notes", (function()
+        local t = chatAfter(function() ns.Slash.dispatch("version") end)
+        return t:find("What's new in v" .. ns.version, 1, true) ~= nil, t:sub(1, 120)
+    end)())
+    check("Options has an About page that renders", (function()
+        ns.Options:Toggle(true)
+        ns.Options:SelectCategory("about")
+        local shown = ns.Options:GetPage("about"):IsShown()
+        ns.Options:SelectCategory("general")
+        ns.Options:Toggle(false)
+        return shown
+    end)())
+    Mock.inGuild, Mock.group = nil, nil
+    SolarynDB.newerVersion = nil
+    V:ResetSession()
 end
 
 print(string.format("\n========================================"));

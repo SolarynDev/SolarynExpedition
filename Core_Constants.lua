@@ -51,6 +51,8 @@ ns.Defaults = {
         batchTurnIns = true,        -- route: finish nearby objectives before walking back to hand in
         routeLevelWeight = 0.15,    -- route: extra distance per level a quest is away from yours (0 = ignore level)
         includeDungeons = false,    -- route: include dungeon and raid quests
+        deferHardQuests = true,     -- route + Next tab: elite, group and 3+ levels-up quests go last
+        optimizeRoute = true,       -- route: tidy the nearest-next order with a 2-opt pass
         areaRadius = 60,            -- guide: yards around a kill/collect marker that count as "in the area" (0 = off)
         arriveRadius = 30,          -- guide: yards from a stop that count as "there"
 
@@ -69,6 +71,7 @@ ns.Defaults = {
         trackingEnabled = true,
         sampleInterval = 30,        -- seconds between movement samples
         gridResolution = 8,         -- NxN cells per map for coverage estimate
+        discoveryAlerts = true,     -- chat line + sound for a new area and each 25% of a zone explored
 
         -- Suggestions
         suggestLimit = 5,

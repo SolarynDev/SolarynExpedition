@@ -166,6 +166,7 @@ function Explored:ImportAll()
         local rec = zoneRecord(z.mapID, false)
         if rec and (rec.revealed or rec.achievement) then found = found + 1 end
     end
+    Explored.importedAll = true
     ns:Fire("explored_changed")
     return found
 end
@@ -431,13 +432,93 @@ function Explored:OnLogin()
     ns:Debounce("explore-import-all", 3, function() Explored:ImportAll() end)
 end
 
+---------------------------------------------------------------------------
+-- Discovery alerts
+---------------------------------------------------------------------------
+-- A chat line when you find a new area ("Discovered Goldshire — Elwynn
+-- Forest 40% explored") and a small fanfare at each quarter of a zone. Only
+-- after the login import has run, so the first import never reads as a
+-- flood of "discoveries". settings.discoveryAlerts turns it off.
+local MILESTONES = { 0.25, 0.5, 0.75, 1 }
+
+local function snapshot(zone)
+    local rec = zoneRecord(zone, false)
+    local areas = {}
+    for id in pairs(rec and rec.areas or {}) do areas[id] = true end
+    -- The achievement may know areas the fog-of-war grid missed.
+    local missing
+    if rec and rec.achievement then
+        missing = {}
+        for _, name in ipairs(rec.achievement.missing or {}) do missing[name] = true end
+    end
+    return { areas = areas, missing = missing, coverage = Explored:Coverage(zone) }
+end
+
+local function play(name)
+    local kit = _G.SOUNDKIT
+    if type(_G.PlaySound) == "function" and type(kit) == "table" and kit[name] then
+        pcall(_G.PlaySound, kit[name])
+        return true
+    end
+end
+
+--- Compare a zone before and after an import; returns the list of messages
+--- it printed (tests read it).
+function Explored:Announce(zone, before)
+    if not (ns.Settings().discoveryAlerts and Explored.importedAll and before) then return nil end
+    local after = snapshot(zone)
+    local found, seen = {}, {}
+    local function add(name)
+        if type(name) == "string" and name ~= "" and not seen[name] then
+            seen[name] = true
+            table.insert(found, name)
+        end
+    end
+    for id in pairs(after.areas) do
+        if not before.areas[id] then add(ns.Try("C_Map", "GetAreaInfo", id)) end
+    end
+    if before.missing and after.missing then
+        for name in pairs(before.missing) do
+            if not after.missing[name] then add(name) end
+        end
+    end
+    table.sort(found)
+    local msgs = {}
+    local zoneName = ns.ZoneData:Name(zone)
+    local pct = after.coverage and ns:FormatPct(after.coverage) or nil
+    if #found > 0 then
+        table.insert(msgs, string.format("discovered |cffffd100%s|r%s", table.concat(found, ", "),
+            pct and string.format(" — %s %s explored", zoneName, pct) or ""))
+        play("MAP_PING")
+        if ns.Session then ns.Session:NoteDiscovery(#found) end
+    end
+    local b, a = before.coverage or 0, after.coverage or 0
+    for _, m in ipairs(MILESTONES) do
+        if b < m and a >= m then
+            if m >= 1 then
+                table.insert(msgs, string.format("|cffffd100%s fully explored!|r", zoneName))
+            else
+                table.insert(msgs, string.format("%s: %d%% explored", zoneName, m * 100))
+            end
+            local _ = play("IG_QUEST_LIST_COMPLETE") or play("MAP_PING")
+        end
+    end
+    for _, msg in ipairs(msgs) do ns:Print("%s", msg) end
+    return msgs
+end
+
 -- Discovering a new area happens on a sub-zone change; re-read the current
 -- zone's fog of war then (cheap: one zone).
 local function onAreaChanged()
     ns:Debounce("explore-import", 1, function()
         local here = ns:PlayerMapID()
         local zone = here and ns.ZoneData:WorldAncestor(here)
-        if zone and Explored:ImportFromClient(zone) then ns:Fire("explored_changed") end
+        if not zone then return end
+        local before = snapshot(zone)
+        if Explored:ImportFromClient(zone) then
+            pcall(Explored.Announce, Explored, zone, before)
+            ns:Fire("explored_changed")
+        end
     end)
 end
 ns:RegisterEvent("ZONE_CHANGED", onAreaChanged, Explored)

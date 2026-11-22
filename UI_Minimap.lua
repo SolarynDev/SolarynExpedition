@@ -108,6 +108,15 @@ local function showTooltip(self)
     end
     GameTooltip:AddDoubleLine("Route stops:", tostring(ns.Route:Count()), 0.7, 0.7, 0.7, 1, 1, 1)
 
+    local newer = ns.Version and ns.Version:Newer()
+    if newer then
+        GameTooltip:AddLine(" ")
+        GameTooltip:AddLine(string.format("Update available: v%s (you have v%s)", newer, tostring(ns.version)),
+            1, 0.6, 0.2, true)
+    else
+        GameTooltip:AddDoubleLine("Version:", "v" .. tostring(ns.version), 0.7, 0.7, 0.7, 0.6, 0.6, 0.6)
+    end
+
     GameTooltip:AddLine(" ")
     GameTooltip:AddLine("|cffffd100Left-click|r  open or close the panel", 0.85, 0.85, 0.85)
     GameTooltip:AddLine("|cffffd100Right-click|r  options", 0.85, 0.85, 0.85)

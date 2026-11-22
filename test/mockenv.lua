@@ -71,6 +71,7 @@ for _, e in ipairs({
     "SUPER_TRACKING_CHANGED", "BAG_UPDATE", "BAG_UPDATE_COOLDOWN",
     "PLAYER_REGEN_ENABLED", "PLAYER_REGEN_DISABLED", "UPDATE_MOUSEOVER_UNIT",
     "CRITERIA_UPDATE", "ACHIEVEMENT_EARNED",
+    "PLAYER_XP_UPDATE", "CHAT_MSG_ADDON", "GROUP_ROSTER_UPDATE",
     "GOSSIP_SHOW", "QUEST_GREETING", "QUEST_DETAIL", "QUEST_PROGRESS", "QUEST_COMPLETE",
 }) do M.KNOWN_EVENTS[e] = true end
 
@@ -370,6 +371,22 @@ function M.install()
         if item then return "|cffffffff|Hitem:" .. item .. "::::|h[x]|h|r", 134400, 1, false end
     end
     function GetRealmName() return "Testrealm" end
+    -- Addon messages: sends are recorded in M.addonSent; M.inGuild / M.group
+    -- ("PARTY", "RAID" or "INSTANCE") model the channels you can use.
+    M.addonSent, M.addonPrefixes = {}, {}
+    C_ChatInfo = {
+        RegisterAddonMessagePrefix = function(p) M.addonPrefixes[p] = true; return true end,
+        SendAddonMessage = function(prefix, text, channel)
+            table.insert(M.addonSent, { prefix = prefix, text = text, channel = channel })
+            return true
+        end,
+    }
+    function IsInGuild() return M.inGuild or false end
+    function IsInRaid() return M.group == "RAID" end
+    function IsInGroup(cat)
+        if cat == 2 then return M.group == "INSTANCE" end
+        return M.group ~= nil
+    end
     function UnitLevel() return M.playerState.level end
     function UnitClass() return "Warrior", "WARRIOR" end
     -- Radians, 0 = north, counter-clockwise (pi/2 = west), as in the client.
@@ -377,7 +394,9 @@ function M.install()
     function GetPlayerFacing() return M.facing end
     M.faction = "Alliance"
     function UnitFactionGroup() return M.faction, M.faction end
-    function GetTime() return 1234.5 end
+    function GetTime() return M.now or 1234.5 end
+    function UnitXP() return M.playerState.xp or 0 end
+    function UnitXPMax() return M.playerState.xpMax or 1000 end
     function GetFramerate() return 60 end
     -- Secret values (newer clients, e.g. unit names in group combat): may be
     -- held and passed around, but string methods, concatenation, length and
@@ -568,7 +587,8 @@ function M.install()
     -- Cursor in screen pixels; tests move it to drive minimap-button drags.
     M.cursor = { x = 0, y = 0 }
     function GetCursorPosition() return M.cursor.x, M.cursor.y end
-    function IsShiftKeyDown() return false end
+    function IsShiftKeyDown() return M.shiftDown or false end
+    function IsControlKeyDown() return M.ctrlDown or false end
     UISpecialFrames = {}
     GameFontHighlight = "F5"
     GameFontHighlightLarge = "F6"
@@ -773,7 +793,8 @@ function M.installCQuestLog()
             i = i + 1
             if i == index then
                 return { title = q.title, level = q.level, questID = id, isHeader = false,
-                         frequency = q.isTask and 2 or 0, isTask = q.isTask, isStory = q.isStory }
+                         frequency = q.isTask and 2 or 0, isTask = q.isTask, isStory = q.isStory,
+                         suggestedGroup = q.suggestedGroup }
             end
         end
         return nil
@@ -782,8 +803,8 @@ function M.installCQuestLog()
     -- Quest tags: M.QUESTS[id].tagID / tagName (81 = Dungeon, 62 = Raid).
     function C_QuestLog.GetQuestTagInfo(questID)
         local q = M.QUESTS[questID]
-        if not q or not q.tagID then return nil end
-        return { tagID = q.tagID, tagName = q.tagName }
+        if not q or not (q.tagID or q.isElite) then return nil end
+        return { tagID = q.tagID, tagName = q.tagName, isElite = q.isElite }
     end
 
     function C_QuestLog.GetQuestObjectives(questID)

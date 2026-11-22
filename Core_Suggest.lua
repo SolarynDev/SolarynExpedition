@@ -115,7 +115,15 @@ function Suggest:Compute()
 
                 local pending = ns.QuestData:NextObjectiveText(e.questID)
 
+                -- Elite, group, dungeon or well-above-you quests: listed, but
+                -- after everything you can comfortably do alone.
+                local diff = ns.QuestData:Difficulty(e.questID)
+                local deferred = settings.deferHardQuests and diff.hard or false
+                if deferred then score = score - 80 end
+
                 table.insert(out, {
+                    hard = deferred or nil,
+                    difficulty = diff.label,
                     kind = ns.SUGGEST.OBJECTIVE,
                     title = e.title,
                     detail = pending or "In progress",
@@ -147,7 +155,8 @@ function Suggest:Compute()
         table.insert(out, {
             kind = ns.SUGGEST.UNLOCK,
             title = target.name,
-            detail = string.format("Levels %d–%d  ·  %s", target.range.min, target.range.max, why),
+            detail = string.format("Levels %d–%d  ·  %s%s", target.range.min, target.range.max, why,
+                (target.reasons and target.reasons[1]) and ("  ·  " .. table.concat(target.reasons, ", ")) or ""),
             uiMapID = target.mapID,
             distance = target.distance,
             level = target.range.min,
@@ -196,12 +205,14 @@ function Suggest:Compute()
 
     if settings.sortByDistance then
         -- Nearest first. Pinned quests stay on top, quests come before zone
-        -- suggestions, and quests with no known location follow the located
-        -- ones; ties fall back to the weighted score.
+        -- suggestions, hard quests (deferHardQuests) come after every other
+        -- quest, and quests with no known location follow the located ones;
+        -- ties fall back to the weighted score.
         table.sort(visible, function(a, b)
             if (a.pinned or false) ~= (b.pinned or false) then return a.pinned or false end
             local qa, qb = a.questID ~= nil, b.questID ~= nil
             if qa ~= qb then return qa end
+            if (a.hard or false) ~= (b.hard or false) then return not a.hard end
             local da, db = a.distance, b.distance
             if da and db then
                 if da ~= db then return da < db end
@@ -211,7 +222,11 @@ function Suggest:Compute()
             return a.score > b.score
         end)
     else
-        table.sort(visible, function(a, b) return a.score > b.score end)
+        table.sort(visible, function(a, b)
+            if (a.pinned or false) ~= (b.pinned or false) then return a.pinned or false end
+            if (a.hard or false) ~= (b.hard or false) then return not a.hard end
+            return a.score > b.score
+        end)
     end
 
     for i = #visible, 1, -1 do

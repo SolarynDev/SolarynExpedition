@@ -14,7 +14,7 @@ _G.SolarynExpedition = ns
 ns.ADDON_NAME = ADDON_NAME
 -- The TOC's "## Version" is the single source of truth.
 local getMetadata = (_G.C_AddOns and _G.C_AddOns.GetAddOnMetadata) or _G.GetAddOnMetadata
-ns.version = (getMetadata and getMetadata(ADDON_NAME, "Version")) or "1.4.0"
+ns.version = (getMetadata and getMetadata(ADDON_NAME, "Version")) or "1.5.0"
 
 -- Build/interface info, captured for the About line and for API capability
 -- probes. GetBuildInfo() is 5-tuples (version, build, date, tocVersion, isTest).
@@ -112,6 +112,9 @@ function ns.OnAddonLoaded(_, name)
     _G.SolarynCharDB = _G.SolarynCharDB or {}
 
     local db = _G.SolarynDB
+    -- No settings yet means a first install (vs. an update from a version
+    -- that didn't record lastVersion); Core_Version uses this.
+    ns.freshInstall = db.settings == nil
     db.schemaVersion = db.schemaVersion or 1
     db.settings = db.settings or {}
     db.overrides = db.overrides or {}       -- account-wide, hand-recorded objective pins

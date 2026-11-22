@@ -375,30 +375,162 @@ function ZoneData:Progression(maxResults)
     if not continent or not level then return out end
 
     local faction = playerFaction()
-    local candidates = {}
-    for _, z in ipairs(self:Children(continent)) do
-        local r = self:LevelRange(z.mapID)
-        if z.mapID ~= zone and r
-            and not (r.faction and faction and r.faction ~= faction)
-            and r.min <= level + 2 and r.max >= level + 1 then
-            table.insert(candidates, {
-                mapID = z.mapID, name = z.name, range = r, faction = r.faction,
-                status = self:LevelStatus(r, level),
-                distance = self:DistanceToZone(z.mapID),
-                inRange = level >= r.min,
-                tier = level < r.min and 3 or (level >= r.max - 1 and 2 or 1),
-            })
+    local draw = self:ZoneDraw()
+    local function collect(contID, otherContinent)
+        local list = {}
+        for _, z in ipairs(self:Children(contID)) do
+            local r = self:LevelRange(z.mapID)
+            if z.mapID ~= zone and r
+                and not (r.faction and faction and r.faction ~= faction)
+                and r.min <= level + 2 and r.max >= level + 1 then
+                local d = draw[z.mapID] or {}
+                local cov = ns.Explored and ns.Explored:Coverage(z.mapID)
+                local c = {
+                    mapID = z.mapID, name = z.name, range = r, faction = r.faction,
+                    status = self:LevelStatus(r, level),
+                    distance = not otherContinent and self:DistanceToZone(z.mapID) or nil,
+                    otherContinent = otherContinent or nil,
+                    continent = contID,
+                    inRange = level >= r.min,
+                    tier = level < r.min and 3 or (level >= r.max - 1 and 2 or 1),
+                    logQuests = d.logQuests or 0,
+                    knownQuests = d.knownQuests or 0,
+                    coverage = cov,
+                }
+                -- What pulls you there: quests you already carry for it count
+                -- most, then quests you've seen offered there, then fresh ground.
+                c.pull = c.logQuests * 2 + math.min(c.knownQuests, 6) * 0.5 + (1 - (cov or 0)) * 0.5
+                c.reasons = self:ZoneReasons(c)
+                table.insert(list, c)
+            end
+        end
+        return list
+    end
+    local candidates = collect(continent, false)
+    if #candidates == 0 then
+        -- Nothing left here: look across the sea (flight, boat or tram).
+        local others = {}
+        for mapID in pairs(self:Maps()) do
+            if mapID ~= continent and self:IsContinent(mapID) then table.insert(others, mapID) end
+        end
+        table.sort(others)
+        for _, contID in ipairs(others) do
+            for _, c in ipairs(collect(contID, true)) do table.insert(candidates, c) end
         end
     end
     table.sort(candidates, function(a, b)
         -- 1: comfortably in range, 2: nearly outgrown, 3: opens within two levels.
         if a.tier ~= b.tier then return a.tier < b.tier end
-        if a.distance and b.distance and a.distance ~= b.distance then return a.distance < b.distance end
-        if (a.distance ~= nil) ~= (b.distance ~= nil) then return a.distance ~= nil end
+        -- Within a tier, a zone with real reasons to go beats a slightly
+        -- nearer one; distance decides otherwise (1 point ≈ 1000 yards).
+        local sa = a.pull - (a.distance or 4000) / 1000
+        local sb = b.pull - (b.distance or 4000) / 1000
+        if math.abs(sa - sb) > 0.01 then return sa > sb end
         return a.range.min < b.range.min
     end)
     for i = 1, math.min(maxResults or 3, #candidates) do out.next[i] = candidates[i] end
     return out
+end
+
+--- Per-zone reasons to go there, keyed by zone mapID:
+---   { logQuests = quests in your log located there,
+---     knownQuests = quests learned from NPCs there that you can still take }
+--- The world zone a map position lies in. A marker read off a continent map
+--- has no zone ancestor, so ask the client which child map is under it, or
+--- else test it against each child zone's world bounds.
+local boundsCache = {}
+function ZoneData:ZoneAt(mapID, x, y, world)
+    local z = mapID and self:WorldAncestor(mapID)
+    if z then return z end
+    if not (mapID and x and y) then return nil end
+    if ns.Has.mapInfoAtPosition then
+        local info = ns.Try("C_Map", "GetMapInfoAtPosition", mapID, x, y)
+        local id = type(info) == "table" and ns.SafeNum(info.mapID)
+        z = id and self:WorldAncestor(id)
+        if z then return z end
+    end
+    world = world or ns:WorldPos(mapID, x, y)
+    if not world then return nil end
+    for _, child in ipairs(self:Children(mapID)) do
+        local b = boundsCache[child.mapID]
+        if b == nil then
+            local a, c = ns:WorldPos(child.mapID, 0, 0), ns:WorldPos(child.mapID, 1, 1)
+            b = (a and c) and {
+                x1 = math.min(a.x, c.x), x2 = math.max(a.x, c.x),
+                y1 = math.min(a.y, c.y), y2 = math.max(a.y, c.y), continentID = a.continentID,
+            } or false
+            boundsCache[child.mapID] = b
+        end
+        if b and world.x >= b.x1 and world.x <= b.x2 and world.y >= b.y1 and world.y <= b.y2
+            and not (b.continentID and world.continentID and b.continentID ~= world.continentID) then
+            return child.mapID
+        end
+    end
+    return nil
+end
+
+-- Cached per quest-log generation (and level): walking every learned NPC's
+-- offers on each suggestion pass would be wasteful.
+local drawCache, drawKey
+function ZoneData:ZoneDraw()
+    local key = string.format("%s:%s", tostring(ns.QuestData and ns.QuestData:Generation()),
+        tostring(ns.UnitLevelSafe()))
+    if drawCache and drawKey == key then return drawCache end
+    local out = {}
+    local function bump(mapID, key, x, y, world)
+        local z = self:ZoneAt(mapID, x, y, world)
+        if not z then return end
+        out[z] = out[z] or {}
+        out[z][key] = (out[z][key] or 0) + 1
+    end
+    local QD = ns.QuestData
+    if QD then
+        for _, e in ipairs(QD:Scan()) do
+            -- Same filter as the route: daily/task quests aren't a reason to move.
+            if not e.isHeader and not e.isHidden and not (e.isTask and ns.Settings().ignoreTasks) then
+                local wp = QD:PrimaryWaypoint(e.questID)
+                if wp then bump(wp.uiMapID, "logQuests", wp.x, wp.y, wp.world) end
+            end
+        end
+    end
+    local db = _G.SolarynDB
+    local QG = ns.QuestGivers
+    if QG and db and type(db.npcs) == "table" then
+        local level = ns.UnitLevelSafe()
+        for npcID, rec in pairs(db.npcs) do
+            if type(rec) == "table" and rec.mapID then
+                for _, q in ipairs(QG:Offers(npcID)) do
+                    -- Grey quests aren't a reason to travel.
+                    if not q.trivial and not (level and q.level and q.level < level - 5) then
+                        bump(rec.mapID, "knownQuests", rec.x, rec.y)
+                    end
+                end
+            end
+        end
+    end
+    drawCache, drawKey = out, key
+    return out
+end
+function ZoneData:ResetZoneDraw() drawCache, drawKey = nil, nil end
+
+--- Short phrases saying why a zone is recommended, for rows and tooltips.
+function ZoneData:ZoneReasons(c)
+    local r = {}
+    if c.logQuests > 0 then
+        table.insert(r, string.format("%d of your quests", c.logQuests))
+    end
+    if c.knownQuests > 0 then
+        table.insert(r, string.format("%d quest%s seen offered", c.knownQuests, c.knownQuests == 1 and "" or "s"))
+    end
+    if not c.coverage or c.coverage < 0.05 then
+        table.insert(r, "unexplored")
+    elseif c.coverage < 0.5 then
+        table.insert(r, string.format("%d%% explored", math.floor(c.coverage * 100 + 0.5)))
+    end
+    if c.otherContinent then
+        table.insert(r, "on " .. (self:Name(c.continent) or "another continent"))
+    end
+    return r
 end
 
 ---------------------------------------------------------------------------

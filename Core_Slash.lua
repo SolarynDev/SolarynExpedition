@@ -116,12 +116,16 @@ local HELP = {
     { group = "Zones & exploration", commands = {
         { "zones", "", "Print exploration coverage per zone",
           "Coverage comes from your 'Explore <Zone>' achievement when there is one (areas found of the total), otherwise from your world map and where you've walked." },
+        { "stats", "", "This session: XP per hour, time to level, quests, discoveries",
+          "Counts from login (or /reload): experience gained and the rate, roughly how long until your next level at that pace, quests handed in and new areas discovered. Hover the tracker's header for the same numbers." },
         { "zone", "reset [all]", "Clear the addon's exploration data",
           "'reset' clears the zone you're in, 'reset all' clears every zone. Your world map and achievements are untouched and are read back in on the next update.",
           "/sol zone reset" },
     } },
     { group = "Help & troubleshooting", commands = {
         { "help", "[command]", "This list, or details for one command", nil, "/sol help pin" },
+        { "version", "", "Your version, whether a newer one is out, and what's new",
+          "Shows the version you're running and this version's highlights. A newer version is noticed when a guild or group mate runs it (addons can't check the internet); this also asks them now. Options → About shows the same." },
         { "report", "", "Collect diagnostics to share",
           "Runs /sol api and /sol where together, saves the result (written to disk on /reload) and opens it in a window ready to copy into a bug report." },
         { "api", "", "Report what this client supports",
@@ -384,6 +388,21 @@ function COMMANDS.zones()
     end
 end
 
+function COMMANDS.version()
+    ns:Print("%s", ns.Version:StatusText())
+    local lines = ns.Version:WhatsNew()
+    if #lines > 0 then
+        out(string.format("What's new in v%s:", tostring(ns.version)))
+        for _, l in ipairs(lines) do out("  · " .. l) end
+    end
+    ns.Version:Broadcast()
+end
+
+function COMMANDS.stats()
+    ns:Print("this session:")
+    for _, line in ipairs(ns.Session:Lines()) do out("  " .. line) end
+end
+
 function COMMANDS.zone(arg)
     arg = (arg or ""):lower()
     if arg == "reset all" or arg == "resetall" then
@@ -457,12 +476,15 @@ local function run_api()
         else
             local names = {}
             for i, z in ipairs(prog.next) do
-                names[i] = string.format("%s %d-%d%s", z.name, z.range.min, z.range.max,
-                    z.distance and (" " .. ns:FormatDistance(z.distance)) or "")
+                names[i] = string.format("%s %d-%d%s%s", z.name, z.range.min, z.range.max,
+                    z.distance and (" " .. ns:FormatDistance(z.distance)) or "",
+                    (z.reasons and z.reasons[1]) and (" [" .. table.concat(z.reasons, ", ") .. "]") or "")
             end
             outf("  next zones: %s", table.concat(names, "; "))
         end
     end
+    local openers = ns.QuestData:QuestLogOpeners()
+    outf("  quest log openers: %s", #openers > 0 and table.concat(openers, ", ") or "none found")
     outf("  exploration: tracking %s, %d zones recorded, fog-of-war import %s",
         ns.Settings().trackingEnabled and "on" or "off", ns.Explored:Summary().zones,
         ns.Has.exploredAreasAtPos and "available" or "NOT available")
@@ -524,11 +546,17 @@ local function run_where()
                 table.insert(parts, "forMap=" .. fmt(ns.Try("C_QuestLog", "GetNextWaypointForMap", e.questID, playerMap)))
             end
             table.insert(parts, "lv=" .. tostring(e.level or "-"))
-            local tagID, tagName = ns.QuestData:TagInfo(e.questID)
-            if tagID or tagName then
-                table.insert(parts, string.format("tag=%s%s%s", tostring(tagID or "-"),
-                    tagName and (" " .. tagName) or "", e.isDungeon and " (dungeon)" or ""))
+            local tagID, tagName, isElite = ns.QuestData:TagInfo(e.questID)
+            if tagID or tagName or isElite then
+                table.insert(parts, string.format("tag=%s%s%s%s", tostring(tagID or "-"),
+                    tagName and (" " .. tagName) or "", isElite and " elite" or "",
+                    e.isDungeon and " (dungeon)" or ""))
             end
+            if e.suggestedGroup and e.suggestedGroup > 0 then
+                table.insert(parts, "group=" .. e.suggestedGroup)
+            end
+            local diff = ns.QuestData:Difficulty(e.questID)
+            if diff.hard then table.insert(parts, "|cffffb233hard|r" .. (diff.label and ("(" .. diff.label .. ")") or "")) end
             table.insert(parts, ns.QuestData:IsComplete(e.questID) and "done" or "open")
             out(string.format("  %d %s: %s",
                 e.questID, ns:Truncate(e.title or "?", 24), table.concat(parts, "  ")))

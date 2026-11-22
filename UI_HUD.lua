@@ -127,7 +127,7 @@ end
 local function buildUpcomingRow(i)
     local row = CreateFrame("Button", nil, body)
     row:SetHeight(ROW_H)
-    row:RegisterForClicks("LeftButtonUp")
+    row:RegisterForClicks("LeftButtonUp", "RightButtonUp")
     row.alt = Widgets:Fill(row, "BACKGROUND", Theme.rowAlt)
     row.alt:SetAllPoints()
     local hl = Widgets:Fill(row, "HIGHLIGHT", Theme.rowHover)
@@ -146,9 +146,12 @@ local function buildUpcomingRow(i)
     row.text:SetPoint("LEFT", 24, 0)
     row.text:SetPoint("RIGHT", row.dist, "LEFT", -4, 0)
 
-    row:SetScript("OnClick", function(self)
-        if IsShiftKeyDown() and self.stop and self.stop.questID then
-            ns.Route:Shelve(self.stop.questID)
+    row:SetScript("OnClick", function(self, button)
+        local st = self.stop
+        if IsShiftKeyDown() and st and st.questID then
+            ns.Route:Shelve(st.questID)
+        elseif button == "RightButton" then
+            if st and st.questID then ns.QuestData:ShowQuest(st.questID) end
         elseif self.index then
             ns.Route:Guide(self.index)
         end
@@ -159,8 +162,10 @@ local function buildUpcomingRow(i)
         Widgets:ShowTooltip(self, st.title or "?", {
             st.kind == "turnin" and "Hand in" or "Objective",
             ns:MapName(st.uiMapID),
+            st.difficulty and ("|cffffb233" .. st.difficulty .. " quest|r") or nil,
             "",
             "Click: guide from this stop",
+            "Right-click: read the quest in the quest log",
             "Shift-click: shelve this quest",
         })
     end)
@@ -213,10 +218,16 @@ local function build()
         HUD:UpdateItems()          -- move the item buttons along
     end)
     header:SetScript("OnClick", function() ns.Panel:Toggle(true); ns.Panel:SetTab("route") end)
-    Widgets:TooltipLines(header, "Route tracker", {
-        "Click: open the Route tab",
-        "Drag: move (lock it in options)",
-    })
+    header:SetScript("OnEnter", function(self)
+        local lines = { "Click: open the Route tab", "Drag: move (lock it in options)" }
+        if ns.Session then
+            table.insert(lines, "")
+            table.insert(lines, "|cffffd100This session|r")
+            for _, l in ipairs(ns.Session:Lines()) do table.insert(lines, l) end
+        end
+        Widgets:ShowTooltip(self, "Route tracker", lines)
+    end)
+    header:SetScript("OnLeave", function() GameTooltip:Hide() end)
     headerBg = Widgets:Fill(header, "BACKGROUND", Theme.titleBg)
     headerBg:SetAllPoints()
     local sheen = Widgets:Fill(header, "BORDER", Theme.titleSheen)
@@ -289,12 +300,20 @@ local function build()
     currentBlock = CreateFrame("Button", nil, body)
     currentBlock:SetPoint("TOPLEFT", 6, -6)
     currentBlock:SetPoint("TOPRIGHT", -6, -6)
-    currentBlock:RegisterForClicks("LeftButtonUp")
-    currentBlock:SetScript("OnClick", function()
+    currentBlock:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    currentBlock:SetScript("OnClick", function(_, button)
         local st = ns.Route:Next()
-        if st then ns.Route:SetWaypointTo(st) end
+        if not st then return end
+        if button == "RightButton" then
+            ns.Route:SetWaypointTo(st)
+        elseif st.questID then
+            ns.QuestData:ShowQuest(st.questID)
+        end
     end)
-    Widgets:TooltipLines(currentBlock, "Current stop", { "Click: set the waypoint here again" })
+    Widgets:TooltipLines(currentBlock, "Current stop", {
+        "Click: read the quest in the quest log",
+        "Right-click: set the waypoint here again",
+    })
     local cardBg = Widgets:Fill(currentBlock, "BACKGROUND", 1, 0.9, 0.7, 0.04)
     cardBg:SetAllPoints()
     Widgets:Border(currentBlock, Theme.cardEdge, 0, "BORDER")
@@ -639,6 +658,10 @@ function HUD:Refresh()
             local texts = objectiveTexts(stop)
             local caution = stop.kind ~= "turnin" and ns.CautionText(stop.questLevel)
             if caution then table.insert(texts, 1, { text = caution, color = ns.Colors.warn }) end
+            if stop.kind ~= "turnin" and stop.difficulty then
+                table.insert(texts, 1, { text = Widgets.Colorize(stop.difficulty .. " quest", ns.Colors.warn),
+                    color = ns.Colors.warn })
+            end
             for i, fs in ipairs(objectiveLines) do
                 local t = texts[i]
                 if t then
@@ -678,9 +701,11 @@ function HUD:Refresh()
                 row.index, row.stop = idx, st
                 local caution = ns.LevelCaution(st.questLevel)
                 local kind = st.kind == "turnin" and ("  ·  " .. Widgets.Colorize("Hand in", ns.Colors.turnin))
-                    or (caution and ("  " .. Widgets.Colorize("(!)", ns.Colors.warn)))
+                    or ((caution or st.difficulty) and ("  " .. Widgets.Colorize(
+                        st.difficulty and ("(" .. st.difficulty .. ")") or "(!)", ns.Colors.warn)))
                     or ""
-                local dc = st.kind == "turnin" and ns.Colors.turnin or caution and ns.Colors.warn or ns.Colors.quest
+                local dc = st.kind == "turnin" and ns.Colors.turnin
+                    or (caution or st.difficulty) and ns.Colors.warn or ns.Colors.quest
                 row.dot:SetColorTexture(dc.r, dc.g, dc.b, 1)
                 row.text:SetText(string.format("%d. %s%s", idx, st.title or "?", kind))
                 if i % 2 == 0 then row.alt:Show() else row.alt:Hide() end
@@ -724,6 +749,8 @@ function HUD:GetShelveButton() return shelveButton end
 function HUD:GetRestoreButton() return restoreButton end
 
 function HUD:GetFrame() return frame end
+function HUD:GetCurrentBlock() return currentBlock end
+function HUD:GetUpcomingRow(i) return upcomingRows[i] end
 
 ---------------------------------------------------------------------------
 -- Lifecycle

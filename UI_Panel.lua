@@ -219,8 +219,11 @@ local function buildSuggestionRow()
                 "Zone: " .. (s.uiMapID and ns:MapName(s.uiMapID) or "unknown"),
                 s.level and ("Level " .. s.level) or nil,
                 s.kind == ns.SUGGEST.OBJECTIVE and ns.CautionText(s.level) or nil,
+                s.difficulty and s.kind == ns.SUGGEST.OBJECTIVE
+                    and ("|cffffb233" .. s.difficulty .. " quest|r" .. (s.hard and " — listed after easier quests" or "")) or nil,
                 s.questID and ("Quest ID " .. s.questID) or nil,
                 (s.x and s.y or not s.questID) and "" or "|cffff8040The client gave no map location for this quest.|r",
+                s.questID and "Ctrl-click: open in the quest log" or nil,
             },
         }
     end
@@ -245,6 +248,9 @@ local function fillSuggestionRow(row, s, index)
     if missing then detail = detail .. "  ·  no location" end
     local caution = s.kind == ns.SUGGEST.OBJECTIVE and ns.LevelCaution(s.level)
     if caution then detail = detail .. "  ·  " .. caution .. " above you" end
+    if s.kind == ns.SUGGEST.OBJECTIVE and s.difficulty then
+        detail = detail .. "  ·  " .. Widgets.Colorize(s.difficulty, ns.Colors.warn)
+    end
     row.sub:SetText(Widgets.Colorize(KIND_LABEL[s.kind] or "", c) .. "  " .. dim(detail))
 
     row.meta:SetText(s.distance and ns:FormatDistance(s.distance) or "")
@@ -283,7 +289,9 @@ local function buildRouteRow()
     row.sub:SetPoint("RIGHT", row.tag, "LEFT", -6, 0)
 
     row.onClick = function(stop, button)
-        if IsShiftKeyDown and IsShiftKeyDown() and stop.questID then
+        if IsControlKeyDown and IsControlKeyDown() and stop.questID then
+            ns.QuestData:ShowQuest(stop.questID)
+        elseif IsShiftKeyDown and IsShiftKeyDown() and stop.questID then
             ns.Route:Shelve(stop.questID)
             Panel:Refresh()
         elseif button == "RightButton" then
@@ -303,8 +311,11 @@ local function buildRouteRow()
                 stop.kind ~= "turnin" and ns.CautionText(stop.questLevel) or nil,
                 (stop.x and stop.y) and string.format("Position: %.1f, %.1f", stop.x * 100, stop.y * 100) or nil,
                 stop.overridden and "Position comes from a manual /sol pin." or nil,
+                stop.difficulty and ("|cffffb233" .. stop.difficulty .. " quest|r") or nil,
                 "",
                 "Click: guide from this stop",
+                "Right-click: show on the world map",
+                "Ctrl-click: open in the quest log",
                 "Shift-click: shelve this quest (leave it off the route)",
             },
         }
@@ -537,7 +548,11 @@ local function fillLevelRow(row, z, isCurrent)
         if z.range and level and level < z.range.min then
             table.insert(parts, string.format("opens up at %d", z.range.min))
         end
-        table.insert(parts, z.range.faction and (z.range.faction == "Alliance" and "Alliance" or "Horde") or "Contested")
+        -- Why this zone: your quests there, quests seen offered, fresh ground.
+        for _, why in ipairs(z.reasons or {}) do table.insert(parts, why) end
+        if #(z.reasons or {}) == 0 then
+            table.insert(parts, z.range.faction and (z.range.faction == "Alliance" and "Alliance" or "Horde") or "Contested")
+        end
     end
     row.sub:SetText(dim(table.concat(parts, "  ·  ")))
 end
@@ -1043,6 +1058,10 @@ function Panel:GoToStop(stop)
 end
 
 function Panel:OnSuggestionClick(s, button)
+    if s.questID and IsControlKeyDown and IsControlKeyDown() then
+        ns.QuestData:ShowQuest(s.questID)
+        return
+    end
     if button == "RightButton" then
         if s.uiMapID then ns.MapPins:OpenAt(s.uiMapID, s.x, s.y) end
         return

@@ -151,16 +151,58 @@ end
 -- C_QuestLog.GetQuestTagInfo (a table) or the older global GetQuestTagInfo
 -- (tagID, tagName).
 function QuestData:TagInfo(questID)
-    local tagID, tagName
+    local tagID, tagName, isElite
     if ns.Has.questTagInfo then
         local info = ns.Try("C_QuestLog", "GetQuestTagInfo", questID)
-        if type(info) == "table" then tagID, tagName = info.tagID, info.tagName end
+        if type(info) == "table" then
+            tagID, tagName = info.tagID, info.tagName
+            isElite = info.isElite == true
+        end
     end
     if tagID == nil and ns.Has.questTagInfoOld then
         tagID, tagName = ns.Try("_G", "GetQuestTagInfo", questID)
     end
     tagName = ns.IsSafe(tagName) and type(tagName) == "string" and tagName or nil
-    return ns.SafeNum(tagID), tagName
+    return ns.SafeNum(tagID), tagName, isElite or false
+end
+
+-- Enum.QuestTag.Group is 1 on every client that has the enum.
+local function groupTagID()
+    local e = _G.Enum and _G.Enum.QuestTag
+    return (type(e) == "table" and type(e.Group) == "number") and e.Group or 1
+end
+
+--- How hard a quest is to do alone:
+---   { elite = bool, group = n or nil, over = levels above you or nil,
+---     dungeon = bool, hard = bool, label = "Elite" / "Group 3" / nil }
+--- A quest is "hard" when it's elite, wants a group, is a dungeon quest, or
+--- sits ns.CAUTION_LEVELS or more above you. Hard quests go to the end of
+--- the route and the Next tab (settings.deferHardQuests), since an easier
+--- quest nearby is nearly always the better use of your time.
+function QuestData:Difficulty(questID)
+    local e = cache[questID]
+    local tagID, tagName, isElite = self:TagInfo(questID)
+    local name = tagName and tagName:lower() or ""
+    local elite = isElite or name:find("elite", 1, true) ~= nil
+    local group = e and e.suggestedGroup
+    group = (group and group > 1) and group or nil
+    if not group and (tagID == groupTagID() or name:find("group", 1, true)) then group = 2 end
+    local dungeon = e and e.isDungeon or false
+    local over = e and ns.LevelCaution(e.level)
+    local hard = elite or group ~= nil or dungeon or over ~= nil
+    local label = dungeon and (tagName or "Dungeon")
+        or elite and "Elite"
+        or group and (group > 2 and ("Group " .. group) or "Group")
+        or nil
+    return { elite = elite, group = group, over = over, dungeon = dungeon, hard = hard, label = label }
+end
+
+--- True when a quest should be deferred: hard, and the setting is on.
+--- A finished quest never is: the dangerous part is behind you.
+function QuestData:IsDeferred(questID)
+    if not ns.Settings().deferHardQuests then return false end
+    if self:IsComplete(questID) then return false end
+    return self:Difficulty(questID).hard
 end
 
 --- Is this a dungeon or raid quest? False when the client can't tell.
@@ -591,6 +633,84 @@ function QuestData:ObjectiveDistance(questID)
     local pp = ns:PlayerPosition(wp.uiMapID)
     if not pp then return nil end
     return ns:DistanceBetween(pp, wp)
+end
+
+---------------------------------------------------------------------------
+-- Opening a quest in the client's quest log
+---------------------------------------------------------------------------
+-- Clients differ: Classic-style builds have QuestLogFrame (and maybe
+-- QuestLog_OpenToQuest); modern ones keep the log in the world map
+-- (QuestMapFrame_OpenToQuestDetails). We try the Classic frame first when it
+-- exists, then the map, then whatever toggles the log. `/sol api` reports
+-- which of these the client has.
+local function inCombat()
+    return type(_G.InCombatLockdown) == "function" and _G.InCombatLockdown() and true or false
+end
+
+--- Which quest-log openers the client has, as a list of names (for /sol api).
+function QuestData:QuestLogOpeners()
+    local out = {}
+    for _, name in ipairs({ "QuestLog_OpenToQuest", "QuestLogFrame", "QuestLog_SetSelection",
+        "SelectQuestLogEntry", "QuestMapFrame_OpenToQuestDetails", "ToggleQuestLog" }) do
+        local v = _G[name]
+        if type(v) == "function" or type(v) == "table" then table.insert(out, name) end
+    end
+    return out
+end
+
+--- Show a quest's text in the quest log. Returns how it was opened
+--- ("classic", "frame", "map" or "toggle"), or nil when nothing worked.
+function QuestData:OpenInLog(questID)
+    questID = tonumber(questID)
+    if not questID then return nil end
+    local G = _G
+    local index = ns.SafeNum(ns.Try("C_QuestLog", "GetLogIndexForQuestID", questID))
+        or (cache[questID] and cache[questID].questLogIndex)
+
+    -- A quest under a collapsed header has no visible row to select.
+    if index and ns.Has.questInfo then
+        local info = ns.Try("C_QuestLog", "GetInfo", index)
+        if type(info) == "table" and ns.SafeNum(info.questID) ~= questID then index = nil end
+    end
+
+    if index and type(G.QuestLogFrame) == "table" then
+        if type(G.QuestLog_OpenToQuest) == "function" and pcall(G.QuestLog_OpenToQuest, index) then
+            return "classic"
+        end
+        local ok = pcall(function()
+            local f = G.QuestLogFrame
+            if not f:IsShown() then
+                if type(G.ShowUIPanel) == "function" then G.ShowUIPanel(f) else f:Show() end
+            end
+            if type(G.SelectQuestLogEntry) == "function" then G.SelectQuestLogEntry(index) end
+            if type(G.QuestLog_SetSelection) == "function" then G.QuestLog_SetSelection(index) end
+            if type(G.QuestLog_Update) == "function" then G.QuestLog_Update() end
+        end)
+        if ok then return "frame" end
+    end
+
+    -- The modern log lives in the world map, which can't open in combat.
+    if type(G.QuestMapFrame_OpenToQuestDetails) == "function" and not inCombat() then
+        if pcall(G.QuestMapFrame_OpenToQuestDetails, questID) then return "map" end
+    end
+
+    if type(G.ToggleQuestLog) == "function" and not inCombat() then
+        if type(G.C_QuestLog) == "table" and type(G.C_QuestLog.SetSelectedQuest) == "function" then
+            pcall(G.C_QuestLog.SetSelectedQuest, questID)
+        end
+        if index and type(G.SelectQuestLogEntry) == "function" then pcall(G.SelectQuestLogEntry, index) end
+        if pcall(G.ToggleQuestLog) then return "toggle" end
+    end
+    return nil
+end
+
+--- OpenInLog, with a chat line when it can't.
+function QuestData:ShowQuest(questID)
+    local how = self:OpenInLog(questID)
+    if not how then
+        ns:Print(inCombat() and "can't open the quest log in combat." or "couldn't open the quest log for that quest.")
+    end
+    return how
 end
 
 ---------------------------------------------------------------------------

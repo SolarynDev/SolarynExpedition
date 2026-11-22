@@ -135,28 +135,130 @@ local function levelFactor(stop, playerLevel, perLevel)
 end
 Route.LevelFactor = levelFactor
 
-local function orderStops(stops, from)
+--- The cost of walking from `cur` to stop `st`, as the planner sees it:
+--- yards, with hand-ins and off-level quests weighed as described above.
+local function makeCost()
     local settings = ns.Settings()
     local weight = settings.batchTurnIns and HANDIN_WEIGHT_BATCHED or HANDIN_WEIGHT_EAGER
     local playerLevel = ns.UnitLevelSafe()
     local perLevel = tonumber(settings.routeLevelWeight) or 0
-    local pool, ordered = {}, {}
+    return function(cur, st)
+        local d = (cur and ns:DistanceBetween(cur, st)) or 1e9
+        if st.kind == "turnin" then
+            if d > NEAR_HANDIN_YARDS then d = d * weight end
+        else
+            d = d * levelFactor(st, playerLevel, perLevel)
+        end
+        return d
+    end
+end
+
+--- Nearest-next from `from` over `stops`, appending to `ordered`.
+local function nearestNext(stops, from, cost, ordered)
+    local pool = {}
     for i, st in ipairs(stops) do pool[i] = st end
     local cur = from
     while #pool > 0 do
         local bestIdx, bestCost = 1, math.huge
         for i, st in ipairs(pool) do
-            local d = (cur and ns:DistanceBetween(cur, st)) or 1e9
-            if st.kind == "turnin" then
-                if d > NEAR_HANDIN_YARDS then d = d * weight end
-            else
-                d = d * levelFactor(st, playerLevel, perLevel)
-            end
+            local d = cost(cur, st)
             if d < bestCost then bestIdx, bestCost = i, d end
         end
         local chosen = table.remove(pool, bestIdx)
         table.insert(ordered, chosen)
         cur = chosen
+    end
+    return ordered
+end
+
+-- Nearest-next leaves a known kind of mess: it grabs everything close, then
+-- has to walk back across its own path for the one stop it skipped. A 2-opt
+-- pass fixes that by reversing any stretch of the route that makes the whole
+-- walk shorter. Costs depend on direction (hand-ins weigh more), so the
+-- reversed stretch is re-costed in its new direction too; running sums keep
+-- each sweep O(n²).
+--
+-- Only stretches made purely of objective stops are reversed. Hand-ins keep
+-- their place in the order: the ×3 hand-in weight only means "finish the
+-- objectives around you first" to a greedy planner, and a whole-path optimiser
+-- would happily move every hand-in to the front again.
+local TWO_OPT_MAX_STOPS, TWO_OPT_PASSES = 80, 4
+
+--- Total planner cost of walking `path` from `from`.
+local function pathCost(path, from, cost)
+    local total, prev = 0, from
+    for _, st in ipairs(path) do
+        total = total + cost(prev, st)
+        prev = st
+    end
+    return total
+end
+Route.PathCost = function(path, from) return pathCost(path, from, makeCost()) end
+
+local function reverse(path, i, j)
+    while i < j do path[i], path[j] = path[j], path[i]; i, j = i + 1, j - 1 end
+end
+
+local function twoOpt(path, from, cost)
+    local n = #path
+    if n < 3 or n > TWO_OPT_MAX_STOPS then return path end
+    -- The same pairs are asked for over and over: memoise them.
+    local memo = {}
+    local FROM = {}
+    local function c(a, b)
+        local ka = a or FROM
+        local row = memo[ka]
+        if not row then row = {}; memo[ka] = row end
+        local v = row[b]
+        if not v then v = cost(a, b); row[b] = v end
+        return v
+    end
+    for _ = 1, TWO_OPT_PASSES do
+        local improved = false
+        for i = 1, n - 1 do
+            local prev = i == 1 and from or path[i - 1]
+            local fwd, bwd = 0, 0       -- the stretch i..j walked forwards / backwards
+            for j = i + 1, n do
+                if path[i].kind == "turnin" or path[j].kind == "turnin" then break end
+                fwd = fwd + c(path[j - 1], path[j])
+                bwd = bwd + c(path[j], path[j - 1])
+                local nxt = path[j + 1]
+                local old = c(prev, path[i]) + fwd + (nxt and c(path[j], nxt) or 0)
+                local new = c(prev, path[j]) + bwd + (nxt and c(path[i], nxt) or 0)
+                if new < old - 1 then
+                    reverse(path, i, j)
+                    improved = true
+                    break               -- sums are stale; carry on from the next i
+                end
+            end
+        end
+        if not improved then break end
+    end
+    return path
+end
+Route.TwoOpt = function(path, from) return twoOpt(path, from, makeCost()) end
+
+--- Order stops into a walking route from `from`.
+--- Stops flagged `hard` (elite, group or well above you; see
+--- QuestData:Difficulty) go after every other stop, starting from where the
+--- easy part of the route ends, so a nearby elite never comes before an easy
+--- quest a little farther away. Within each part, nearest-next and then 2-opt.
+local function orderStops(stops, from)
+    local settings = ns.Settings()
+    local cost = makeCost()
+    local easy, hard = {}, {}
+    for _, st in ipairs(stops) do
+        table.insert((st.hard and settings.deferHardQuests) and hard or easy, st)
+    end
+    local ordered = nearestNext(easy, from, cost, {})
+    if settings.optimizeRoute then twoOpt(ordered, from, cost) end
+    local split = #ordered
+    if #hard > 0 then
+        -- The hard part starts where the easy part ends.
+        local start = ordered[split] or from
+        local tail = nearestNext(hard, start, cost, {})
+        if settings.optimizeRoute then twoOpt(tail, start, cost) end
+        for _, st in ipairs(tail) do table.insert(ordered, st) end
     end
     for i, st in ipairs(ordered) do st.index = i end
     return ordered
@@ -225,9 +327,13 @@ function Route:Build(opts)
     -- let far-off hand-ins crowd out the objectives right around you.
     local allStops = {}
     for _, e in ipairs(located) do
+        local diff = QuestData:Difficulty(e.questID)
+        local deferred = QuestData:IsDeferred(e.questID)
         for _, s in ipairs(e._stops) do
             s.title = e.title
             s.questLevel = e.level
+            s.difficulty = diff.label
+            s.hard = (deferred and s.kind ~= "turnin") or nil
             s.isTask = e.isTask
             table.insert(allStops, s)
         end
@@ -522,6 +628,16 @@ function Route:Guide(index)
     if #stops == 0 then
         ns:Print("no route to follow. Build one first.")
         return false
+    end
+    if not state.guiding and not index then
+        -- Starting afresh: the route was planned from wherever you stood
+        -- when it was built. Re-plan what's left from where you are now, so
+        -- the first stop really is the nearest.
+        state.current = math.max(1, math.min(#stops, state.current or 1))
+        self:Save(state)
+        self:Replan()
+        state = self:Get()
+        stops = state.stops or {}
     end
     state.current = math.max(1, math.min(#stops, index or state.current or 1))
     -- A new guide starts with a clean slate of reached stops.

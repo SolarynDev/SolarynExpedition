@@ -100,6 +100,10 @@ local CATEGORIES = {
             "Add a stop at the quest giver for quests you can turn in.")
         p.toggle("Include dungeon and raid quests", "includeDungeons",
             "Off: quests done inside an instance stay off the route until they're ready to hand in.")
+        p.toggle("Hard quests last", "deferHardQuests",
+            "Elite, group, dungeon and 3+ levels-above-you quests go after every easier quest, on the route and the Next tab. They drop off first when the route is full.")
+        p.toggle("Tidy the route", "optimizeRoute",
+            "After picking the nearest stop each time, untangle the order so the route doesn't double back across itself.")
         p.slider("Prefer quests at my level", "routeLevelWeight", 0, 0.5, 0.05,
             function(v) return v == 0 and "off" or string.format("+%d%%/lv", math.floor(v * 100 + 0.5)) end,
             "Each level a quest is away from yours makes it count as this much farther. Quests 3+ levels above you are marked (!).")
@@ -153,6 +157,9 @@ local CATEGORIES = {
         p.slider("Grid detail", "gridResolution", 4, 16, 2,
             function(v) return string.format("%d×%d", v, v) end,
             "Each zone is split into this grid. Finer grids are more precise but store more data.")
+        p.group("Discoveries")
+        p.toggle("Announce discoveries", "discoveryAlerts",
+            "A chat line and a sound when you find a new area, and a fanfare at each quarter of a zone explored.")
       end },
 
     { key = "suggestions", label = "Suggestions", icon = "Interface\\Icons\\INV_Scroll_03",
@@ -198,6 +205,25 @@ local CATEGORIES = {
             if not d then return end
             d.overrides = {}
             ns:Print("all recorded quest positions cleared.")
+        end)
+      end },
+
+    { key = "about", label = "About", icon = "Interface\\Icons\\INV_Misc_Book_09",
+      blurb = "Your version, whether a newer one is out, and what's new.",
+      build = function(p)
+        p.group("Version", function() return ns.Version:StatusText() end)
+        p.action("Check for a newer version",
+            "Ask your guild and group which version they run. Anyone with a newer one is reported in chat.",
+            "Check", function()
+                local n = ns.Version:Broadcast(true)
+                ns:Print(n > 0 and "asked %d channel%s; newer versions are reported as they answer."
+                    or "not in a guild or group, so there's no one to ask right now.", n, n == 1 and "" or "s")
+            end)
+        local lines = {}
+        for _, l in ipairs(ns.Version:WhatsNew()) do table.insert(lines, "· " .. l) end
+        p.group("What's new in v" .. tostring(ns.version), table.concat(lines, "\n"))
+        p.action("Show in chat", "Print these notes to chat (same as /sol version).", "Print", function()
+            ns.Slash.dispatch("version")
         end)
       end },
 }
@@ -248,8 +274,14 @@ local function buildPage(parent, cat)
         head:SetPoint("TOPRIGHT", inner, "TOPRIGHT", -2, -y)
         y = y + 22
         if note then
-            local fs, h = Widgets:Note(inner, note, CONTENT_W - 8)
+            -- A function note is re-read whenever the page is shown.
+            local text = type(note) == "function" and note() or note
+            local fs, h = Widgets:Note(inner, text, CONTENT_W - 8)
             fs:SetPoint("TOPLEFT", inner, "TOPLEFT", 4, -y)
+            if type(note) == "function" then
+                scroll.refreshers = scroll.refreshers or {}
+                table.insert(scroll.refreshers, function() fs:SetText(note()) end)
+            end
             y = y + h + 6
         end
         card = Widgets:Card(inner)
@@ -307,7 +339,12 @@ local function selectCategory(key)
         local on = cat.key == key
         local b = navButtons[cat.key]
         local page = pages[cat.key]
-        if on then page:Show() else page:Hide() end
+        if on then
+            page:Show()
+            for _, refresh in ipairs(page.refreshers or {}) do pcall(refresh) end
+        else
+            page:Hide()
+        end
         b.selected = on
         if on then b.bar:Show(); b.sel:Show() else b.bar:Hide(); b.sel:Hide() end
         local c = on and ns.Colors.accent or ns.Colors.text

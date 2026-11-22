@@ -35,7 +35,7 @@ Either way, the aim is the same: less time lost, more time enjoying Azeroth.
 ### The panel (`/sol` or the minimap button)
 Three tabs:
 - **Next:** what to do now, nearest first. Ready hand-ins, quest objectives with their distance and level (coloured like the quest log), and a suggested new zone once you've outgrown yours.
-- **Route:** your quests in walking order. Click any stop to be guided from there.
+- **Route:** your quests in walking order. Click any stop to be guided from there. Ctrl-click a quest here or on the Next tab to read it in the quest log.
 - **Zones:** where to level (your zone's level range and the nearest zones that fit you) and how much of each zone you've explored.
 
 The top of the panel always shows your current zone, its level range and how much of it you've explored.
@@ -44,6 +44,8 @@ The top of the panel always shows your current zone, its level range and how muc
 - **Always up to date:** the route rebuilds itself whenever you accept, finish, hand in or drop a quest. While you're being guided, finished stops stay done and new quests slot in where they fit best.
 - **Areas first:** objectives near you come before walking back to hand in. A hand-in right on your way is picked up immediately.
 - **Your level first:** quests near your level come before ones far from it, and quests 4 or more levels above or below you drop to the end of the route and down the Next tab. Objectives 3 or more levels above you are marked `(!)` in the route, the tracker and the Next tab.
+- **Hard quests last:** elite, group and dungeon quests, and quests 3 or more levels above you, come after every easier quest on the route and the Next tab, and drop off first when the route is full. They're labelled (`Elite`, `Group 3`). Turn it off under options → Route → Hard quests last.
+- **No backtracking:** after picking the nearest stop each time, the route is untangled so it doesn't cross back over itself. Starting the guide re-plans from where you're standing.
 - **No dungeon quests:** quests tagged Dungeon or Raid stay off the route and the Next tab unless you include them in the options. Once one is ready to hand in, its hand-in is routed like any other.
 - **Moves on when the work is done:** a stop counts as done when the quest's objectives are complete, not just because you arrived. When you finish a quest, its hand-in is added to the route and the rest is re-planned from where you stand.
 - **Search areas:** for "kill 8" or "collect 3" objectives the tracker says *in the area* once you're within the search radius (options → Search area), instead of counting yards to a single point.
@@ -53,17 +55,24 @@ The top of the panel always shows your current zone, its level range and how muc
 A compact tracker, framed like the edge of a map, appears while you're being guided:
 - The current stop as a card: its remaining objectives, a live distance, and a gold **direction arrow** relative to the way you're facing.
 - A thin gold strip under the header showing how far along the route you are.
-- **Up next:** the following stops; click one to jump ahead.
+- **Click the current stop to read its quest** in the quest log (right-click puts the waypoint back on it).
+- **Up next:** the following stops; click one to jump ahead, right-click one to read its quest.
+- Hover the header for **this session's numbers**: XP per hour, roughly how long to your next level, quests handed in and areas discovered (also `/sol stats`).
 - Header buttons: **rebuild** the route now, **shelve** the current quest (the bag; the back arrow restores shelved quests), **skip** a stop, **stop** guiding, and collapse.
 - Its size and background opacity are adjustable in the options.
 - **Quest item buttons** for usable quest items in your bags. Bind **"Use quest item (guided quest)"** under *Key Bindings → AddOns*.
+
+### Staying up to date
+- After an update, your first login lists what's new (again any time with `/sol version`, or Options → About).
+- When someone in your guild or group runs a newer version, you're told once in chat and it shows on the minimap button's tooltip. (Addons can't check the internet, so this is how it finds out.)
 
 ### Quest info in tooltips
 - **Mobs, NPCs and objects your quests need** show the quest and your progress (`Kobold Camp Cleanup — Kobold Vermin: 4/8`).
 - **NPCs you've talked to** show the quests they still offer, with their levels (`Available: [7] The Fargodeep Mine`), and which of your quests they take back. This is learned as you play and shared across your characters.
 
 ### Zones and exploration
-- **Level ranges:** each zone's level range, coloured by how it suits you, plus advice on the nearest zones on your continent that fit you: ones with room to level in first, then ones you're nearly outgrowing, then ones opening within two levels.
+- **Level ranges:** each zone's level range, coloured by how it suits you, plus advice on the zones that fit you: ones with room to level in first, then ones you're nearly outgrowing, then ones opening within two levels. Within those, zones that hold quests from your log, quests you've seen NPCs offer, or ground you haven't explored come before ones that are merely closer, and each says why. When nothing on your continent fits, zones on other continents are suggested.
+- **Discoveries:** a chat line and a sound when you find a new area, and a fanfare at each quarter of a zone explored (options → Exploration).
 - **Exploration coverage:** taken from your *Explore \<Zone\>* achievement when there is one, so a fully explored zone reads 100%. Hover a zone to see which areas you haven't found yet. Otherwise coverage comes from your world map's revealed areas and where you've walked.
 
 ---
@@ -116,12 +125,14 @@ A compact tracker, framed like the edge of a map, appears while you're being gui
 | Command | What it does |
 |---|---|
 | `/sol zones` | Print exploration coverage for each zone |
+| `/sol stats` | This session: XP per hour, roughly how long to your next level, quests handed in and areas discovered |
 | `/sol zone reset [all]` | Clear the add-on's exploration data for this zone (or all zones). Your map and achievements are read back in |
 
 ### Help & troubleshooting
 | Command | What it does |
 |---|---|
 | `/sol help [command]` | The command list, or details and an example for one command |
+| `/sol version` | Your version, what's new in it, and whether a guild or group mate has a newer one |
 | `/sol report` | Collect diagnostics (`/sol api` + `/sol where`) in a window ready to copy into a bug report |
 | `/sol api` | Report which game features this client supports. Include it with bug reports |
 | `/sol debug` | Toggle debug messages |
@@ -132,9 +143,9 @@ A compact tracker, framed like the edge of a map, appears while you're being gui
 
 Open with `/sol options`, the cog on the panel, or right-click the minimap button. Pick a category on the left; every option explains itself underneath its name, and changes apply straight away.
 - **General:** minimap button, panel lock, login message, route pins on the map, quest info in tooltips.
-- **Route:** keep the route up to date automatically, auto-build on open, finish nearby objectives before handing in, prefer quests at your level, include dungeon and raid quests, quests per route; and how the guide follows it: move on automatically, wait until the quest work is done (or move on when you arrive), arrival distance, search area.
+- **Route:** keep the route up to date automatically, auto-build on open, finish nearby objectives before handing in, prefer quests at your level, include dungeon and raid quests, hard quests last, tidy the route, quests per route; and how the guide follows it: move on automatically, wait until the quest work is done (or move on when you arrive), arrival distance, search area.
 - **Tracker:** show while guiding (or always), lock, number of upcoming stops, size, background opacity, quest item buttons.
-- **Exploration:** sampling interval and grid detail.
+- **Exploration:** sampling interval, grid detail and discovery announcements.
 - **Suggestions:** rank by distance, or by your own weights (distance, level, same zone, hand-ins, story and task quests).
 - **Maintenance:** rebuild the route, reset options, reset zone data, clear recorded positions.
 

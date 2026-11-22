@@ -52,6 +52,7 @@ local CAPS = {
     areaInfo          = { "C_Map", "GetAreaInfo" },
     mapWorldSize      = { "C_Map", "GetMapWorldSize" },
     mapLevels         = { "C_Map", "GetMapLevels" },
+    mapInfoAtPosition = { "C_Map", "GetMapInfoAtPosition" },
     -- The world map's fog of war: which spots on a map are already revealed.
     exploredAreasAtPos = { "C_MapExplorationInfo", "GetExploredAreaIDsAtPosition" },
 }
